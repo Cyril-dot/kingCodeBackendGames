@@ -36,7 +36,12 @@ public class AdminTransactionController {
             @RequestParam(required = false) TransactionStatus status,
             @RequestParam(required = false) UUID userId) {
 
-        List<Transaction> transactions = transactionRepository.findAllByOrderByCreatedAtDesc();
+        List<Transaction> transactions = transactionRepository.findAllByOrderByCreatedAtDesc()
+                .stream()
+                // Hide PENDING deposits — only show once Paystack confirms via webhook
+                .filter(tx -> !(tx.getType() == TransactionType.DEPOSIT
+                        && tx.getStatus() == TransactionStatus.PENDING))
+                .collect(Collectors.toList());
 
         if (type != null) {
             transactions = transactions.stream()
