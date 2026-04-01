@@ -23,7 +23,7 @@ public class Scheduler {
     }
 
     // Ping every 30 seconds (30,000 ms)
-    @Scheduled(fixedRate = 3000)
+    @Scheduled(fixedRate = 1000)
     public void keepAlive() {
         pingRender();
         pingDatabase();
