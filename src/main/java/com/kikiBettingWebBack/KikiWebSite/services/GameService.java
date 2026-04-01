@@ -97,25 +97,13 @@ public class GameService {
     }
 
     // ---------------------------------------------------------------
-    // REMOVE GAME — only if UPCOMING and no bet selections exist
+    // REMOVE GAME — admin can delete any game regardless of status
     // ---------------------------------------------------------------
     @Transactional
     public void removeGame(UUID gameId) {
-
         Game game = getGameOrThrow(gameId);
-
-        if (game.getStatus() != GameStatus.UPCOMING) {
-            throw new BadRequestException(
-                    "Only UPCOMING games can be removed. Use cancel to void a live game.");
-        }
-
-        if (betSelectionRepository.existsByGameId(gameId)) {
-            throw new BadRequestException(
-                    "Cannot remove this game — it has active bet selections. Cancel it instead.");
-        }
-
         gameRepository.delete(game);
-        log.info("Game removed: {}", gameId);
+        log.info("Game removed: {} (status was: {})", gameId, game.getStatus());
     }
 
     // ---------------------------------------------------------------
