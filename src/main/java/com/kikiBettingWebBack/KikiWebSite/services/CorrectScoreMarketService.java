@@ -411,4 +411,18 @@ public class CorrectScoreMarketService {
                 .selections(details)
                 .build();
     }
+
+
+    // ================================================================
+// USER — Get my correct score bet history
+// ================================================================
+    @Transactional(readOnly = true)
+    public List<BetSlipResponse> getMyCorrectScoreBets(UUID userId) {
+        return betSlipRepository.findByUserIdOrderByPlacedAtDesc(userId)
+                .stream()
+                .filter(slip -> slip.getSelections().stream()
+                        .anyMatch(sel -> sel.getMarketType() == MarketType.CORRECT_SCORE))
+                .map(this::toBetSlipResponse)
+                .collect(Collectors.toList());
+    }
 }
