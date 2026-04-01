@@ -80,6 +80,22 @@ public class GameService {
         return toGameResponse(game);
     }
 
+    @Transactional
+    public GameResponse updateGameStatus(UUID gameId, GameStatus newStatus) {
+        Game game = getGameOrThrow(gameId);
+
+        // Prevent illegal transitions
+        if (game.getStatus() == GameStatus.FINISHED || game.getStatus() == GameStatus.CANCELLED) {
+            throw new BadRequestException(
+                    "Cannot change status of a " + game.getStatus() + " game");
+        }
+
+        game.setStatus(newStatus);
+        game = gameRepository.save(game);
+        log.info("Game {} status changed to {}", gameId, newStatus);
+        return toGameResponse(game);
+    }
+
     // ---------------------------------------------------------------
     // REMOVE GAME — only if UPCOMING and no bet selections exist
     // ---------------------------------------------------------------

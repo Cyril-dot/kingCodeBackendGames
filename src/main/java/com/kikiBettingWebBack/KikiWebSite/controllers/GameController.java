@@ -6,6 +6,7 @@ import com.kikiBettingWebBack.KikiWebSite.dtos.EnterResultRequest;
 import com.kikiBettingWebBack.KikiWebSite.dtos.UpdateGameRequest;
 import com.kikiBettingWebBack.KikiWebSite.dtos.GameResponse;
 import com.kikiBettingWebBack.KikiWebSite.dtos.SettlementResponse;
+import com.kikiBettingWebBack.KikiWebSite.entities.GameStatus;
 import com.kikiBettingWebBack.KikiWebSite.services.GameService;
 import com.kikiBettingWebBack.KikiWebSite.services.SettlementService;
 import jakarta.validation.Valid;
@@ -64,6 +65,16 @@ public class GameController {
         List<GameResponse> games = gameService.getAllGames();
         return ResponseEntity.ok(ApiResponse.success(
                 "Fetched " + games.size() + " games", games));
+    }
+
+    // PATCH /api/v1/admin/games/{gameId}/status — update game status
+    @PatchMapping("/api/v1/admin/games/{gameId}/status")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<GameResponse>> updateGameStatus(
+            @PathVariable UUID gameId,
+            @RequestParam GameStatus status) {
+        GameResponse game = gameService.updateGameStatus(gameId, status);
+        return ResponseEntity.ok(ApiResponse.success("Game status updated to " + status, game));
     }
 
     // POST /api/v1/admin/games — add a new game
