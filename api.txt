@@ -1,0 +1,105 @@
+Kiki Betting Web API Documentation - Full Technical Reference
+
+================================================================================
+I. ENDPOINT CONTROLLERS
+================================================================================
+
+1. User Controller (/api/v1/users)
+   - POST /register : Register a new user (Auto-detects currency by IP).
+   - POST /login : Authenticate user and return JWT.
+   - GET /me : Get current user profile and wallet details.
+   - PATCH /me : Update personal details or change password.
+
+2. Admin Controller (/api/v1/admin)
+   - POST /register : Create admin account.
+   - POST /login : Admin authentication.
+   - GET /me : Get admin profile.
+   - GET /users : List all registered users (Admin only).
+   - GET /users/{userId} : View specific user details (Admin only).
+
+3. Football (Live Data) Controller (/api/v1/football)
+   - GET /fixtures : Returns all upcoming + live club fixtures (next 7 days) + WC 2026.
+   - GET /live : Returns only in-play / paused matches.
+   - GET /health : Quick health-check endpoint for service status.
+
+4. Game Controller
+   - Public (/api/v1/games/public):
+     - GET / : List all upcoming games.
+     - GET /{gameId} : Get game details.
+     - GET /booking/{code} : Load game by booking code.
+   - Admin (/api/v1/admin/games):
+     - GET / : List all games (any status).
+     - POST / : Add a new game.
+     - PATCH /{gameId} : Update match details/odds.
+     - DELETE /{gameId} : Remove a game.
+     - POST /{gameId}/result : Enter score and trigger auto-settlement.
+     - POST /{gameId}/cancel : Cancel game and refund all stakes.
+
+5. Wallet Controller (/api/v1/wallet)
+   - POST /deposit : Initiate Paystack payment.
+   - POST /paystack/webhook : Paystack payment confirmation.
+   - POST /withdraw : Request withdrawal (10% fee applied).
+   - GET /transactions : View personal transaction history.
+
+6. Betting Controller (/api/v1/bets)
+   - POST / : Place a new bet (Accumulator supported).
+   - GET /my : View user's bet history.
+   - GET /slip/{reference} : View specific bet slip by reference code.
+
+================================================================================
+II. ENTITIES (Database Models)
+================================================================================
+
+1. User
+   - id (UUID), email (String), phoneNumber (String), password (String), firstName (String), lastName (String), currency (String), role (USER, ADMIN), createdAt, updatedAt.
+
+2. Admin
+   - id (UUID), fullName (String), email (String), password (String), role (ADMIN), createdAt, updatedAt.
+
+3. Game
+   - id (UUID), homeTeam (String), awayTeam (String), matchDate (LocalDateTime), status (UPCOMING, LIVE, FINISHED, CANCELLED), homeScore (Integer), awayScore (Integer), oddsHomeWin, oddsDraw, oddsAwayWin, oddsOver1_5, oddsOver2_5, oddsOver3_5 (BigDecimal), bookingCode (String).
+
+4. Wallet
+   - id (UUID), user (User), balance (BigDecimal), totalDeposited, totalWithdrawn (BigDecimal), hasEverDeposited (boolean).
+
+5. Transaction
+   - id (UUID), user (User), type (DEPOSIT, WITHDRAWAL, BET_STAKE, BET_WINNING, REFUND), status (PENDING, SUCCESSFUL, FAILED), amount (BigDecimal), balanceAfter (BigDecimal), paymentReference (String), description (String), betSlipId (UUID).
+
+6. BetSlip
+   - id (UUID), user (User), stake (BigDecimal), totalOdds (BigDecimal), potentialPayout (BigDecimal), actualPayout (BigDecimal), status (PENDING, WON, LOST, VOID), slipReference (String), placedAt, settledAt.
+
+7. BetSelection
+   - id (UUID), betSlip (BetSlip), game (Game), marketType (HOME_WIN, DRAW, AWAY_WIN, OVER_1_5, OVER_2_5, OVER_3_5), oddsAtPlacement (BigDecimal), selectionStatus (BetStatus).
+
+================================================================================
+III. DTOs (Data Transfer Objects)
+================================================================================
+
+1. Auth & User DTOs:
+   - RegisterRequest: firstName, lastName, email, phoneNumber, password.
+   - AdminRegisterRequest: fullName, email, password.
+   - LoginRequest: email, password.
+   - UpdateUserRequest: firstName, lastName, phoneNumber, currentPassword, newPassword.
+   - UserResponse: id, firstName, lastName, email, phoneNumber, createdAt, walletBalance, totalDeposited, totalWithdrawn, hasEverDeposited, canWithdraw.
+   - AdminResponse: id, fullName, email, isActive, createdAt.
+
+2. Football Live Data DTOs:
+   - MatchDTO: uid, source, competition, category, status, live (boolean), minute, utcDate, venue, teams (home/away), crests, scores, odds (OddsDTO).
+   - OddsDTO: home, draw, away, over15, over25, over35 (double).
+
+3. Wallet DTOs:
+   - DepositInitiateRequest: amount.
+   - DepositInitiateResponse: authorizationUrl, accessCode, reference.
+   - WithdrawRequest: amount, accountNumber, bankCode, accountName.
+   - WithdrawResponse: reference, requestedAmount, feeDeducted, amountReceived, balanceAfter, status.
+
+4. Game DTOs:
+   - AddGameRequest / UpdateGameRequest: homeTeam, awayTeam, matchDate, odds, bookingCode.
+   - EnterResultRequest: homeScore, awayScore.
+   - SettlementResponse: gameId, totalSlipsSettled, totalWinners, totalLosers, totalPayoutCredited.
+   - GameResponse: id, homeTeam, awayTeam, matchDate, status, odds, scores.
+
+5. Betting DTOs:
+   - PlaceBetRequest: stake, selections (gameId, marketType).
+   - BetSlipResponse: id, stake, totalOdds, potentialPayout, status, slipReference, createdAt, selections (List).
+   - CorrectScore DTOs: RevealCorrectScoreRequest, CorrectScoreMarketResponse, CorrectScoreOptionResponse, PlaceCorrectScoreBetRequest.
