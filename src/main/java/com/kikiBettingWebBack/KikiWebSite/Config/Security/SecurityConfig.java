@@ -37,21 +37,22 @@ public class SecurityConfig {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(csrf -> csrf.disable())
-
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/.well-known/**", "/ping",
-                                "/api/v1/admin/register",  "/api/v1/admin/login",
-                                "/api/v1/users/register", "/api/v1/users/login",
+                                "/.well-known/**",
+                                "/ping",
+                                "/api/v1/admin/register",
+                                "/api/v1/admin/login",
+                                "/api/v1/users/register",
+                                "/api/v1/users/login",
                                 "/test/**",
-                                "/api/v1/football/**",
-                                "/api/v1/payment/webhook",
-                                "/api/football/**"
+                                "/api/v1/football/**",   // your v1 football controller
+                                "/api/football/**",      // your /api/football controller
+                                "/api/v1/payment/webhook"
                         ).permitAll()
-                        .requestMatchers("/api/v1/payment/webhook").permitAll()
                         .anyRequest().authenticated()
                 )
 
@@ -72,8 +73,6 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // ✅ Prevents Spring Boot from auto-registering the filter a second time
-    // Spring Security already registers it above — this stops the duplicate
     @Bean
     public FilterRegistrationBean<JwtAuthenticationFilter> jwtFilterRegistration(
             JwtAuthenticationFilter filter) {

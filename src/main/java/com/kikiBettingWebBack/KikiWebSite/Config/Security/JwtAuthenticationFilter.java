@@ -28,26 +28,32 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserRepository userRepo;
     private final AdminRepository adminRepo;
 
-    private static final List<String> PUBLIC_AUTH_ENDPOINTS = Arrays.asList(
-            "/api/auth/register",
-            "/api/auth/login",
-            "/api/auth/refresh",
+    private static final List<String> PUBLIC_PREFIXES = Arrays.asList(
+            "/api/auth/",
             "/api/v1/auth",
-            "/api/v1/admin/login",   // ← add this so login doesn't need a token
-            "/api/v1/admin/create"   // ← add this so registration doesn't need a token
+            "/api/v1/admin/login",
+            "/api/v1/admin/register",
+            "/api/v1/users/login",
+            "/api/v1/users/register",
+            // ── Football endpoints (public) ──────────────────────────────
+            "/api/football/",
+            "/api/v1/football/",
+            // ── Misc public ──────────────────────────────────────────────
+            "/api/v1/payment/webhook",
+            "/test/",
+            "/login",
+            "/ping",
+            "/actuator/",
+            "/ws/",
+            "/ws-meeting/",
+            "/.well-known/"
     );
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        if (PUBLIC_AUTH_ENDPOINTS.stream().anyMatch(path::startsWith)) return true;
-        return path.startsWith("/login")
-                || path.startsWith("/api/test/")
-                || path.startsWith("/actuator/")
-                || path.startsWith("/ws/")
-                || path.startsWith("/ws-meeting/")
-                || path.equals("/favicon.ico")
-                || path.startsWith("/.well-known/");
+        if (path.equals("/favicon.ico") || path.equals("/ping")) return true;
+        return PUBLIC_PREFIXES.stream().anyMatch(path::startsWith);
     }
 
     @Override
@@ -67,48 +73,46 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             String header = request.getHeader("Authorization");
             if (header == null || !header.startsWith("Bearer ")) {
+                // No token — let Spring Security's permitAll() rules decide
                 filterChain.doFilter(request, response);
                 return;
             }
 
-            String token = header.substring(7);
-            String email = tokenService.getEmailFromAccessToken(token);
-            String role  = tokenService.getRoleFromAccessToken(token);
+            String token  = header.substring(7);
+            String email  = tokenService.getEmailFromAccessToken(token);
+            String role   = tokenService.getRoleFromAccessToken(token);
 
-            log.debug("🔍 Token role claim: '{}' for email: {}", role, email);
+            log.debug("🔍 Token role: '{}' for email: {}", role, email);
 
             UserDetails userDetails;
 
-            // ✅ FIXED: was "SELLER" — must match whatever Admin.getRole().name() returns
             if ("ADMIN".equals(role) || "SELLER".equals(role)) {
-                var adminOptional = adminRepo.findByEmail(email);
-                if (adminOptional.isEmpty()) {
+                var adminOpt = adminRepo.findByEmail(email);
+                if (adminOpt.isEmpty()) {
                     log.warn("❌ No admin found for email: {}", email);
                     filterChain.doFilter(request, response);
                     return;
                 }
-                userDetails = new AdminPrincipal(adminOptional.get());
-
+                userDetails = new AdminPrincipal(adminOpt.get());
             } else {
-                var userOptional = userRepo.findByEmail(email);
-                if (userOptional.isEmpty()) {
+                var userOpt = userRepo.findByEmail(email);
+                if (userOpt.isEmpty()) {
                     log.warn("❌ No user found for email: {}", email);
                     filterChain.doFilter(request, response);
                     return;
                 }
-                userDetails = new UserPrincipal(userOptional.get());
+                userDetails = new UserPrincipal(userOpt.get());
             }
 
-            UsernamePasswordAuthenticationToken authToken =
-                    new UsernamePasswordAuthenticationToken(
-                            userDetails, null, userDetails.getAuthorities());
-
+            var authToken = new UsernamePasswordAuthenticationToken(
+                    userDetails, null, userDetails.getAuthorities());
             SecurityContextHolder.getContext().setAuthentication(authToken);
-            log.info("✅ Authentication successful for: {}", email);
+            log.info("✅ Authenticated: {}", email);
 
         } catch (Exception e) {
-            log.error("💥 JWT authentication error: {}", e.getMessage(), e);
+            log.error("💥 JWT error: {}", e.getMessage(), e);
             SecurityContextHolder.clearContext();
+            // Still continue — Spring Security will enforce auth on protected routes
         }
 
         filterChain.doFilter(request, response);
