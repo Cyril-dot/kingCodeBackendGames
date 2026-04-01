@@ -103,3 +103,7 @@ III. DTOs (Data Transfer Objects)
    - PlaceBetRequest: stake, selections (gameId, marketType).
    - BetSlipResponse: id, stake, totalOdds, potentialPayout, status, slipReference, createdAt, selections (List).
    - CorrectScore DTOs: RevealCorrectScoreRequest, CorrectScoreMarketResponse, CorrectScoreOptionResponse, PlaceCorrectScoreBetRequest.
+
+
+hello12345
+hwukaottih@gmail.com
