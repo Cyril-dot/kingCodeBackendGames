@@ -48,7 +48,8 @@ public class SecurityConfig {
                                 "/api/v1/users/register", "/api/v1/users/login",
                                 "/test/**",
                                 "/api/v1/football/**",
-                                "/api/v1/payment/webhook"
+                                "/api/v1/payment/webhook",
+                                "/api/football/**"
                         ).permitAll()
                         .requestMatchers("/api/v1/payment/webhook").permitAll()
                         .anyRequest().authenticated()
