@@ -17,6 +17,7 @@ public interface BetSelectionRepository extends JpaRepository<BetSelection, UUID
 
     boolean existsByGameId(UUID gameId);
 
+    void deleteByGameId(UUID gameId);
     // Used by CorrectScoreMarketService.revealAndSettle() to fetch all
     // correct score selections for a game when settling bets
     List<BetSelection> findByGameIdAndMarketType(UUID gameId, MarketType marketType);

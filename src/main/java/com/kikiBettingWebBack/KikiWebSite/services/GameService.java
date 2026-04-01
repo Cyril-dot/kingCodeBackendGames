@@ -102,10 +102,10 @@ public class GameService {
     @Transactional
     public void removeGame(UUID gameId) {
         Game game = getGameOrThrow(gameId);
+        betSelectionRepository.deleteByGameId(gameId); // wipe selections first
         gameRepository.delete(game);
-        log.info("Game removed: {} (status was: {})", gameId, game.getStatus());
+        log.info("Game force-deleted: {} (status was: {})", gameId, game.getStatus());
     }
-
     // ---------------------------------------------------------------
     // GET ALL GAMES (public) — all statuses, ordered by match date
     // ---------------------------------------------------------------
