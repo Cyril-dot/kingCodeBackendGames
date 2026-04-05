@@ -41,18 +41,18 @@ public class SecurityConfig {
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/.well-known/**",
-                                "/ping",
-                                "/api/v1/admin/register",
-                                "/api/v1/admin/login",
-                                "/api/v1/users/register",
-                                "/api/v1/users/login",
-                                "/test/**",
-                                "/api/v1/football/**",   // your v1 football controller
-                                "/api/football/**",      // your /api/football controller
-                                "/api/v1/payment/webhook"
-                        ).permitAll()
+                       .requestMatchers(
+    "/.well-known/**",
+    "/ping",
+    "/api/v1/admin/register",
+    "/api/v1/admin/login",
+    "/api/v1/users/register",
+    "/api/v1/users/login",
+    "/test/**",
+    "/api/v1/football/**",
+    "/api/football/**",
+    "/api/v1/wallet/paystack/webhook"   // ← fix this line
+).permitAll()
                         .anyRequest().authenticated()
                 )
 
