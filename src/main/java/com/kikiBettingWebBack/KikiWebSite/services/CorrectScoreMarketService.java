@@ -44,7 +44,6 @@ public class CorrectScoreMarketService {
         }
 
         correctScoreOptionRepository.deleteByGameId(gameId);
-
         List<CorrectScoreOption> options = buildRandomOptions(game);
         correctScoreOptionRepository.saveAll(options);
 
@@ -53,7 +52,7 @@ public class CorrectScoreMarketService {
     }
 
     // ================================================================
-    // ADMIN — Step 1: Lock market (no new bets)
+    // ADMIN — Step 1 (optional): Lock market — no new bets
     // ================================================================
     @Transactional
     public GameResponse lockMarket(UUID gameId) {
@@ -72,15 +71,19 @@ public class CorrectScoreMarketService {
     }
 
     // ================================================================
-    // ADMIN — Step 2: Reveal final score and settle all bets
+    // ADMIN — Reveal final score and settle all correct score bets.
+    // FIX: now works from OPEN or LOCKED — no longer requires LOCKED first.
+    // This means the admin's single "Enter Result & Settle" action works
+    // without a separate lock step.
     // ================================================================
     @Transactional
     public GameResponse revealAndSettle(UUID gameId, RevealCorrectScoreRequest request) {
 
         Game game = getGameOrThrow(gameId);
 
-        if (game.getCorrectScoreMarketStatus() != CorrectScoreMarketStatus.LOCKED) {
-            throw new BadRequestException("Market must be LOCKED before revealing the score");
+        // Only block if already settled — allow OPEN or LOCKED
+        if (game.getCorrectScoreMarketStatus() == CorrectScoreMarketStatus.SETTLED) {
+            throw new BadRequestException("This correct score market has already been settled");
         }
 
         int finalHome = request.getHomeScore();
@@ -94,9 +97,10 @@ public class CorrectScoreMarketService {
         List<BetSelection> selections = betSelectionRepository
                 .findByGameIdAndMarketType(gameId, MarketType.CORRECT_SCORE);
 
+        log.info("Found {} correct score selections to settle for game {}", selections.size(), gameId);
+
         for (BetSelection sel : selections) {
 
-            // FIX: use .equals() for Integer comparison, drop the winningOption gate
             boolean won = isWinningSelection(sel, finalHome, finalAway);
 
             sel.setSelectionStatus(won ? BetStatus.WON : BetStatus.LOST);
@@ -279,8 +283,8 @@ public class CorrectScoreMarketService {
     // ================================================================
 
     /**
-     * FIX: Removed the winningOption gate entirely.
-     * Uses .equals() instead of == for safe Integer unboxing comparison.
+     * FIX: Uses .equals() not == for Integer comparison.
+     * No winningOption gate — win is determined purely by the stored option.
      */
     private boolean isWinningSelection(BetSelection sel, int finalHome, int finalAway) {
         if (sel.getCorrectScoreOptionId() == null) return false;
