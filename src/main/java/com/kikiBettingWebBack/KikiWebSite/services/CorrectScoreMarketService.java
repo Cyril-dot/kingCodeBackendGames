@@ -340,7 +340,7 @@ public class CorrectScoreMarketService {
         return BigDecimal.valueOf(raw).setScale(2, RoundingMode.HALF_UP);
     }
 
-    private Game getGameOrThrow(UUID gameId) {
+   /* private Game getGameOrThrow(UUID gameId) {
         return gameRepository.findById(gameId)
                 .orElseThrow(() -> new ResourceNotFoundException("Game not found: " + gameId));
     }
@@ -407,4 +407,4 @@ public class CorrectScoreMarketService {
                 .selections(details)
                 .build();
     }
-}
+}*/
