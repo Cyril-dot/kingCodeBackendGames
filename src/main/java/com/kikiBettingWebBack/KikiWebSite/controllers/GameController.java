@@ -97,13 +97,22 @@ public class GameController {
         return ResponseEntity.ok(ApiResponse.success("Game updated successfully", game));
     }
 
-    // DELETE /api/v1/admin/games/{gameId} — remove upcoming game
+    // DELETE /api/v1/admin/games/{gameId} — remove a single game regardless of status
     @DeleteMapping("/api/v1/admin/games/{gameId}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> removeGame(
             @PathVariable UUID gameId) {
         gameService.removeGame(gameId);
         return ResponseEntity.ok(ApiResponse.success("Game removed successfully"));
+    }
+
+    // DELETE /api/v1/admin/games — remove ALL games regardless of status
+    @DeleteMapping("/api/v1/admin/games")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> removeAllGames() {
+        int deleted = gameService.removeAllGames();
+        return ResponseEntity.ok(ApiResponse.success(
+                "All games removed successfully. Total deleted: " + deleted));
     }
 
     // POST /api/v1/admin/games/{gameId}/result — enter score and auto-settle all bets

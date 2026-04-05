@@ -28,6 +28,7 @@ public class GameService {
     private final GameRepository gameRepository;
     private final BetSelectionRepository betSelectionRepository;
     private final CorrectScoreOptionRepository correctScoreOptionRepository;
+
     // ---------------------------------------------------------------
     // ADD GAME
     // ---------------------------------------------------------------
@@ -100,15 +101,41 @@ public class GameService {
     // ---------------------------------------------------------------
     // REMOVE GAME — admin can delete any game regardless of status
     // ---------------------------------------------------------------
-    // In GameService.java
     @Transactional
     public void removeGame(UUID gameId) {
         Game game = getGameOrThrow(gameId);
-        betSelectionRepository.deleteByGameId(gameId);        // already there ✓
-        correctScoreOptionRepository.deleteByGameId(gameId);  // ← ADD THIS LINE
+        betSelectionRepository.deleteByGameId(gameId);
+        correctScoreOptionRepository.deleteByGameId(gameId);
         gameRepository.delete(game);
         log.info("Game force-deleted: {} (status was: {})", gameId, game.getStatus());
     }
+
+    // ---------------------------------------------------------------
+    // REMOVE ALL GAMES — admin wipes every game regardless of status
+    // ---------------------------------------------------------------
+    @Transactional
+    public int removeAllGames() {
+        List<Game> allGames = gameRepository.findAll();
+        int count = allGames.size();
+
+        if (count == 0) {
+            log.info("removeAllGames called but no games exist.");
+            return 0;
+        }
+
+        List<UUID> allGameIds = allGames.stream()
+                .map(Game::getId)
+                .collect(Collectors.toList());
+
+        // Delete dependents first to avoid FK constraint violations
+        allGameIds.forEach(betSelectionRepository::deleteByGameId);
+        allGameIds.forEach(correctScoreOptionRepository::deleteByGameId);
+
+        gameRepository.deleteAll(allGames);
+        log.warn("ALL {} games force-deleted by admin.", count);
+        return count;
+    }
+
     // ---------------------------------------------------------------
     // GET ALL GAMES (public) — all statuses, ordered by match date
     // ---------------------------------------------------------------

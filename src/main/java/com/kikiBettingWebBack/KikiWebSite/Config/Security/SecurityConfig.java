@@ -52,7 +52,8 @@ public class SecurityConfig {
                                 "/api/v1/football/**",
                                 "/api/football/**",
                                 "/api/v1/wallet/paystack/webhook",
-                            "/api/v1/games/public"
+                            "/api/v1/games/public",
+                                "/api/v1/games/public"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
