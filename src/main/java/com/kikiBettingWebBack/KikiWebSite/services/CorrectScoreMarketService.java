@@ -28,12 +28,10 @@ public class CorrectScoreMarketService {
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
 
-    // ── Seeded random for reproducible test scenarios ─────────────
     private final Random random = new Random();
 
     // ================================================================
     // ADMIN — Generate / regenerate score options for a game
-    // Can only be done while market is OPEN
     // ================================================================
     @Transactional
     public List<CorrectScoreOptionResponse> generateOptions(UUID gameId) {
@@ -45,7 +43,6 @@ public class CorrectScoreMarketService {
                     "Score options can only be regenerated while the market is OPEN");
         }
 
-        // Wipe any previously generated options
         correctScoreOptionRepository.deleteByGameId(gameId);
 
         List<CorrectScoreOption> options = buildRandomOptions(game);
@@ -56,7 +53,7 @@ public class CorrectScoreMarketService {
     }
 
     // ================================================================
-    // ADMIN — Step 1: Lock market (score hidden, no new bets)
+    // ADMIN — Step 1: Lock market (no new bets)
     // ================================================================
     @Transactional
     public GameResponse lockMarket(UUID gameId) {
@@ -86,31 +83,27 @@ public class CorrectScoreMarketService {
             throw new BadRequestException("Market must be LOCKED before revealing the score");
         }
 
-        // Persist the final score
-        game.setHomeScore(request.getHomeScore());
-        game.setAwayScore(request.getAwayScore());
+        int finalHome = request.getHomeScore();
+        int finalAway = request.getAwayScore();
+
+        game.setHomeScore(finalHome);
+        game.setAwayScore(finalAway);
         game.setCorrectScoreMarketStatus(CorrectScoreMarketStatus.SETTLED);
         gameRepository.save(game);
 
-        // Find the winning option (if it exists in the generated list)
-        Optional<CorrectScoreOption> winningOption =
-                correctScoreOptionRepository.findByGameIdAndHomeScoreAndAwayScore(
-                        gameId, request.getHomeScore(), request.getAwayScore());
-
-        // Settle all CORRECT_SCORE bet selections for this game
         List<BetSelection> selections = betSelectionRepository
                 .findByGameIdAndMarketType(gameId, MarketType.CORRECT_SCORE);
 
         for (BetSelection sel : selections) {
-            boolean won = winningOption.isPresent()
-                    && sel.getOddsAtPlacement() != null
-                    && isWinningSelection(sel, request.getHomeScore(), request.getAwayScore(), gameId);
+
+            // FIX: use .equals() for Integer comparison, drop the winningOption gate
+            boolean won = isWinningSelection(sel, finalHome, finalAway);
 
             sel.setSelectionStatus(won ? BetStatus.WON : BetStatus.LOST);
             betSelectionRepository.save(sel);
 
-            // Settle the parent slip
             BetSlip slip = sel.getBetSlip();
+
             if (won) {
                 BigDecimal payout = slip.getStake()
                         .multiply(sel.getOddsAtPlacement())
@@ -121,7 +114,6 @@ public class CorrectScoreMarketService {
                 slip.setSettledAt(LocalDateTime.now());
                 betSlipRepository.save(slip);
 
-                // Credit winnings to wallet
                 Wallet wallet = walletRepository.findByUserId(slip.getUser().getId())
                         .orElseThrow(() -> new ResourceNotFoundException("Wallet not found"));
                 wallet.credit(payout);
@@ -138,6 +130,7 @@ public class CorrectScoreMarketService {
                         .build());
 
                 log.info("Settled WON — slip: {} | payout: {}", slip.getSlipReference(), payout);
+
             } else {
                 slip.setActualPayout(BigDecimal.ZERO);
                 slip.setStatus(BetStatus.LOST);
@@ -148,7 +141,7 @@ public class CorrectScoreMarketService {
         }
 
         log.info("Correct score market SETTLED for game {} | final: {}:{} | {} bets settled",
-                gameId, request.getHomeScore(), request.getAwayScore(), selections.size());
+                gameId, finalHome, finalAway, selections.size());
 
         return toGameResponse(game);
     }
@@ -163,7 +156,6 @@ public class CorrectScoreMarketService {
         List<CorrectScoreOption> options =
                 correctScoreOptionRepository.findByGameIdOrderByHomeScoreAscAwayScoreAsc(gameId);
 
-        // Only expose the final score after the market is settled
         Integer finalHome = game.getCorrectScoreMarketStatus() == CorrectScoreMarketStatus.SETTLED
                 ? game.getHomeScore() : null;
         Integer finalAway = game.getCorrectScoreMarketStatus() == CorrectScoreMarketStatus.SETTLED
@@ -243,8 +235,6 @@ public class CorrectScoreMarketService {
                 .marketType(MarketType.CORRECT_SCORE)
                 .oddsAtPlacement(odds)
                 .selectionStatus(BetStatus.PENDING)
-                // Store chosen score on the selection via a transient label
-                // The actual score chosen is traced via correctScoreOptionId below
                 .correctScoreOptionId(option.getId())
                 .build();
 
@@ -272,26 +262,43 @@ public class CorrectScoreMarketService {
     }
 
     // ================================================================
+    // USER — Get my correct score bet history
+    // ================================================================
+    @Transactional(readOnly = true)
+    public List<BetSlipResponse> getMyCorrectScoreBets(UUID userId) {
+        return betSlipRepository.findByUserIdOrderByPlacedAtDesc(userId)
+                .stream()
+                .filter(slip -> slip.getSelections().stream()
+                        .anyMatch(sel -> sel.getMarketType() == MarketType.CORRECT_SCORE))
+                .map(this::toBetSlipResponse)
+                .collect(Collectors.toList());
+    }
+
+    // ================================================================
     // PRIVATE HELPERS
     // ================================================================
 
     /**
-     * Generates randomised correct score options covering:
-     *  0:0 → 4:0 and reverses → mixed combos → wild scores
-     * Odds scale inversely with likelihood (low-scoring = lower odds).
+     * FIX: Removed the winningOption gate entirely.
+     * Uses .equals() instead of == for safe Integer unboxing comparison.
      */
+    private boolean isWinningSelection(BetSelection sel, int finalHome, int finalAway) {
+        if (sel.getCorrectScoreOptionId() == null) return false;
+        return correctScoreOptionRepository.findById(sel.getCorrectScoreOptionId())
+                .map(opt -> opt.getHomeScore().equals(finalHome) && opt.getAwayScore().equals(finalAway))
+                .orElse(false);
+    }
+
     private List<CorrectScoreOption> buildRandomOptions(Game game) {
         List<CorrectScoreOption> options = new ArrayList<>();
         Set<String> used = new HashSet<>();
 
-        // Standard range 0-4 each side
         for (int h = 0; h <= 4; h++) {
             for (int a = 0; a <= 4; a++) {
                 addOption(game, h, a, options, used);
             }
         }
 
-        // Wild scores
         int[][] wilds = {{5,0},{0,5},{5,1},{1,5},{5,2},{2,5},{4,3},{3,4},{5,3},{3,5},{6,0},{0,6}};
         for (int[] w : wilds) {
             addOption(game, w[0], w[1], options, used);
@@ -314,10 +321,6 @@ public class CorrectScoreMarketService {
                 .build());
     }
 
-    /**
-     * Odds logic — lower scoring = lower odds (more likely),
-     * high-scoring / unusual = higher odds.
-     */
     private BigDecimal randomOdds(int h, int a) {
         int total = h + a;
         double base;
@@ -328,20 +331,9 @@ public class CorrectScoreMarketService {
         else if (total <= 5)  base = 22.0;
         else                  base = 45.0;
 
-        double jitter = 0.8 + (random.nextDouble() * 0.4); // ±20%
+        double jitter = 0.8 + (random.nextDouble() * 0.4);
         double raw = base * jitter;
         return BigDecimal.valueOf(raw).setScale(2, RoundingMode.HALF_UP);
-    }
-
-    /**
-     * A selection wins if the option the user picked matches the final score.
-     * We look up the option by its stored ID on the selection.
-     */
-    private boolean isWinningSelection(BetSelection sel, int finalHome, int finalAway, UUID gameId) {
-        if (sel.getCorrectScoreOptionId() == null) return false;
-        return correctScoreOptionRepository.findById(sel.getCorrectScoreOptionId())
-                .map(opt -> opt.getHomeScore() == finalHome && opt.getAwayScore() == finalAway)
-                .orElse(false);
     }
 
     private Game getGameOrThrow(UUID gameId) {
@@ -410,19 +402,5 @@ public class CorrectScoreMarketService {
                 .settledAt(slip.getSettledAt())
                 .selections(details)
                 .build();
-    }
-
-
-    // ================================================================
-// USER — Get my correct score bet history
-// ================================================================
-    @Transactional(readOnly = true)
-    public List<BetSlipResponse> getMyCorrectScoreBets(UUID userId) {
-        return betSlipRepository.findByUserIdOrderByPlacedAtDesc(userId)
-                .stream()
-                .filter(slip -> slip.getSelections().stream()
-                        .anyMatch(sel -> sel.getMarketType() == MarketType.CORRECT_SCORE))
-                .map(this::toBetSlipResponse)
-                .collect(Collectors.toList());
     }
 }
