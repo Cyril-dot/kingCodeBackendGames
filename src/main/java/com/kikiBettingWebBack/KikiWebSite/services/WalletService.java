@@ -1,5 +1,7 @@
 package com.kikiBettingWebBack.KikiWebSite.services;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kikiBettingWebBack.KikiWebSite.dtos.DepositInitiateRequest;
 import com.kikiBettingWebBack.KikiWebSite.dtos.DepositInitiateResponse;
 import com.kikiBettingWebBack.KikiWebSite.dtos.TransactionResponse;
@@ -27,7 +29,6 @@ import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,8 +43,10 @@ public class WalletService {
     private final UserRepository userRepository;
     private final TransactionRepository transactionRepository;
     private final WebClient paystackWebClient;
+    // FIX #1: inject Jackson ObjectMapper instead of hand-rolling JSON parsing
+    private final ObjectMapper objectMapper;
 
-    @Value("${app.paystack.secret-key}")          // ← was webhook-secret, now secret-key
+    @Value("${app.paystack.secret-key}")
     private String paystackSecretKey;
 
     @Value("${app.paystack.callback-url}")
@@ -73,7 +76,10 @@ public class WalletService {
         }
 
         String internalRef = "DEP-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
-        int amountInSmallestUnit = request.getAmount().multiply(BigDecimal.valueOf(100)).intValue();
+
+        // FIX #5: use Math.toIntExact() to catch overflow instead of silent intValue()
+        int amountInSmallestUnit = Math.toIntExact(
+                request.getAmount().multiply(BigDecimal.valueOf(100)).longValueExact());
 
         Map<String, Object> paystackBody = Map.of(
                 "email",        user.getEmail(),
@@ -135,18 +141,28 @@ public class WalletService {
             throw new BadRequestException("Invalid webhook signature");
         }
 
-        if (!payload.contains("\"charge.success\"")) {
-            log.info("Paystack webhook received — event not charge.success, ignoring");
+        // FIX #1: parse webhook payload with Jackson instead of fragile string search
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(payload);
+        } catch (Exception e) {
+            log.warn("Webhook payload is not valid JSON — skipping");
             return;
         }
 
-        String reference = extractFromJson(payload, "reference");
-        if (reference == null) {
+        String event = root.path("event").asText(null);
+        if (!"charge.success".equals(event)) {
+            log.info("Paystack webhook received — event '{}' ignored", event);
+            return;
+        }
+
+        String reference = root.path("data").path("reference").asText(null);
+        if (reference == null || reference.isBlank()) {
             log.warn("Webhook payload missing reference — skipping");
             return;
         }
 
-        // Idempotency check — same pattern as PaystackService
+        // Idempotency check
         Transaction tx = transactionRepository.findByPaymentReference(reference).orElse(null);
         if (tx == null) {
             log.warn("Webhook received for unknown reference: {} — skipping", reference);
@@ -158,7 +174,8 @@ public class WalletService {
             return;
         }
 
-        Wallet wallet = walletRepository.findByUserId(tx.getUser().getId())
+        // FIX #2: use pessimistic lock to prevent concurrent double-credit race condition
+        Wallet wallet = walletRepository.findByUserIdWithLock(tx.getUser().getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Wallet not found"));
 
         wallet.credit(tx.getAmount());
@@ -183,7 +200,9 @@ public class WalletService {
         User user = getUser(userId);
         String currency = user.getCurrency();
 
-        Wallet wallet = walletRepository.findByUserId(userId)
+        // FIX #2: acquire pessimistic write lock before reading balance to prevent
+        // concurrent withdrawals from racing past the balance check simultaneously
+        Wallet wallet = walletRepository.findByUserIdWithLock(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Wallet not found"));
 
         if (!wallet.isHasEverDeposited()) {
@@ -212,10 +231,13 @@ public class WalletService {
 
         String reference = "WDR-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
 
+        // FIX #3: save transaction as PENDING — only mark SUCCESS after Paystack confirms.
+        // Previously the tx was saved as SUCCESS before Paystack accepted the transfer,
+        // so a silent failure left the user debited with no money sent.
         Transaction tx = Transaction.builder()
                 .user(user)
                 .type(TransactionType.WITHDRAWAL)
-                .status(TransactionStatus.SUCCESS)
+                .status(TransactionStatus.PENDING)           // ← was SUCCESS
                 .amount(requestedAmount)
                 .balanceAfter(wallet.getBalance())
                 .paymentReference(reference)
@@ -224,7 +246,11 @@ public class WalletService {
                 .build();
 
         transactionRepository.save(tx);
-        initiatePaystackTransfer(amountReceived, currency, request, reference, user.getEmail());
+
+        // FIX #4: create recipient first, then transfer using the returned recipient_code.
+        // Previously the code sent inline recipient details directly to /transfer, which
+        // Paystack does not support — /transfer requires a pre-created recipient_code.
+        initiatePaystackTransfer(amountReceived, currency, request, reference, user.getEmail(), tx);
 
         log.info("Withdrawal processed — user: {} | amount: {} | fee: {} | received: {}",
                 user.getEmail(), requestedAmount, fee, amountReceived);
@@ -236,8 +262,8 @@ public class WalletService {
                 .amountReceived(amountReceived)
                 .balanceAfter(wallet.getBalance())
                 .currency(currency)
-                .status("SUCCESS")
-                .message(String.format("Withdrawal successful. %s %.2f will be sent to your account.",
+                .status("PENDING")                           // ← was SUCCESS; reflects actual state
+                .message(String.format("Withdrawal initiated. %s %.2f will be sent to your account once confirmed.",
                         currency, amountReceived))
                 .build();
     }
@@ -257,34 +283,74 @@ public class WalletService {
     // PRIVATE HELPERS
     // ---------------------------------------------------------------
 
+    /**
+     * FIX #4: two-step Paystack transfer.
+     *  Step 1 — POST /transferrecipient  → get recipient_code
+     *  Step 2 — POST /transfer           → send money using that code
+     * On success, mark the transaction SUCCESS. On failure, log for manual review.
+     */
     private void initiatePaystackTransfer(BigDecimal amount, String currency,
-                                          WithdrawRequest request, String reference, String email) {
+                                          WithdrawRequest request, String reference,
+                                          String email, Transaction tx) {
         try {
-            int amountInSmallestUnit = amount.multiply(BigDecimal.valueOf(100)).intValue();
+            // FIX #5: safe conversion — throws ArithmeticException on overflow
+            int amountInSmallestUnit = Math.toIntExact(
+                    amount.multiply(BigDecimal.valueOf(100)).longValueExact());
 
-            Map<String, Object> body = Map.of(
+            // Step 1: create recipient
+            Map<String, Object> recipientBody = Map.of(
+                    "type",           "mobile_money",
+                    "name",           request.getAccountName(),
+                    "account_number", request.getAccountNumber(),
+                    "bank_code",      request.getBankCode(),
+                    "currency",       currency
+            );
+
+            Map<?, ?> recipientResponse = paystackWebClient.post()
+                    .uri("/transferrecipient")
+                    .bodyValue(recipientBody)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+
+            if (recipientResponse == null || !(Boolean) recipientResponse.get("status")) {
+                log.error("Recipient creation failed for {} — ref: {} — manual review needed", email, reference);
+                return;
+            }
+
+            Map<?, ?> recipientData = (Map<?, ?>) recipientResponse.get("data");
+            String recipientCode = (String) recipientData.get("recipient_code");
+
+            // Step 2: initiate transfer using recipient_code
+            Map<String, Object> transferBody = Map.of(
                     "source",    "balance",
                     "amount",    amountInSmallestUnit,
                     "currency",  currency,
                     "reference", reference,
-                    "recipient", Map.of(
-                            "type",           "mobile_money",
-                            "name",           request.getAccountName(),
-                            "account_number", request.getAccountNumber(),
-                            "bank_code",      request.getBankCode(),
-                            "currency",       currency
-                    ),
-                    "reason", "Betting platform withdrawal"
+                    "recipient", recipientCode,           // ← correct field: just the code string
+                    "reason",    "Betting platform withdrawal"
             );
 
             paystackWebClient.post()
                     .uri("/transfer")
-                    .bodyValue(body)
+                    .bodyValue(transferBody)
                     .retrieve()
                     .bodyToMono(Map.class)
                     .subscribe(
-                            response -> log.info("Paystack transfer initiated for {}", email),
-                            error    -> log.error("Paystack transfer failed for {} — ref: {}", email, reference)
+                            response -> {
+                                boolean ok = response != null && Boolean.TRUE.equals(response.get("status"));
+                                if (ok) {
+                                    // FIX #3: only mark SUCCESS once Paystack confirms acceptance
+                                    tx.setStatus(TransactionStatus.SUCCESS);
+                                    transactionRepository.save(tx);
+                                    log.info("Paystack transfer accepted for {} — ref: {}", email, reference);
+                                } else {
+                                    log.error("Paystack transfer rejected for {} — ref: {} — manual review needed",
+                                            email, reference);
+                                }
+                            },
+                            error -> log.error("Paystack transfer error for {} — ref: {} — manual review needed",
+                                    email, reference, error)
                     );
 
         } catch (Exception e) {
@@ -294,9 +360,8 @@ public class WalletService {
 
     private boolean isValidSignature(String payload, String paystackSignature) {
         try {
-            // ← Now uses paystackSecretKey directly, matching PaystackService exactly
-            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA512");
-            mac.init(new javax.crypto.spec.SecretKeySpec(
+            Mac mac = Mac.getInstance("HmacSHA512");
+            mac.init(new SecretKeySpec(
                     paystackSecretKey.getBytes(StandardCharsets.UTF_8), "HmacSHA512"));
 
             byte[] hashBytes = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
@@ -313,16 +378,6 @@ public class WalletService {
             log.error("Signature validation error: {}", e.getMessage());
             return false;
         }
-    }
-
-    private String extractFromJson(String json, String key) {
-        String search = "\"" + key + "\":\"";
-        int start = json.indexOf(search);
-        if (start == -1) return null;
-        start += search.length();
-        int end = json.indexOf("\"", start);
-        if (end == -1) return null;
-        return json.substring(start, end);
     }
 
     private User getUser(UUID userId) {
